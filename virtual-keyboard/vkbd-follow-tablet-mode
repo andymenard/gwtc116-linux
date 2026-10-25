@@ -1,0 +1,16 @@
+#!/bin/sh
+# Enable KDE's virtual keyboard only while KWin is in tablet mode.
+set_vkbd() {
+    gdbus call --session --dest org.kde.KWin --object-path /VirtualKeyboard \
+        --method org.freedesktop.DBus.Properties.Set org.kde.kwin.VirtualKeyboard enabled "<$1>" >/dev/null
+}
+current=$(gdbus call --session --dest org.kde.KWin --object-path /org/kde/KWin \
+    --method org.freedesktop.DBus.Properties.Get org.kde.KWin.TabletModeManager tabletMode)
+case "$current" in *true*) set_vkbd true ;; *) set_vkbd false ;; esac
+
+gdbus monitor --session --dest org.kde.KWin --object-path /org/kde/KWin | while read -r line; do
+    case "$line" in
+        *tabletModeChanged*true*)  set_vkbd true ;;
+        *tabletModeChanged*false*) set_vkbd false ;;
+    esac
+done

@@ -1,0 +1,3 @@
+# Gateway GWTC116-2: display accelerometer reports X mirrored (left/right rotation swapped)
+sensor:accel-display:modalias:*:dmi:*:svnGPUCompany:pnGWTC116-2:*
+ ACCEL_MOUNT_MATRIX=-1, 0, 0; 0, 1, 0; 0, 0, 1

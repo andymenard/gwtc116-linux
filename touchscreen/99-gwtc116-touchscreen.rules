@@ -1,0 +1,2 @@
+# Gateway GWTC116-2 Silead touchscreen calibration (9-point, calibrate9.html)
+ACTION=="add|change", KERNEL=="event*", ATTRS{name}=="silead_ts", ENV{LIBINPUT_CALIBRATION_MATRIX}="-2.00410 0.01628 0.99674 -0.01084 3.26856 -0.00605"

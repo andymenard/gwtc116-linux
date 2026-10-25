@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Touch Calibration</title>
+<style>
+  :root { --bg:#111; --fg:#eee; --dim:#888; --target:#ff4d4d; --done:#4caf50; --hit:#4da3ff; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--fg);
+    font:18px/1.4 system-ui, sans-serif; overflow:hidden; touch-action:none;
+    user-select:none; -webkit-user-select:none; }
+  #msg { position:fixed; left:50%; top:50%; transform:translate(-50%,-50%);
+    text-align:center; max-width:80vw; pointer-events:none; }
+  #msg.top { top:30%; }
+  #msg h1 { font-size:28px; margin:0 0 .4em; }
+  #msg .dim { color:var(--dim); font-size:15px; }
+  #msg button, #msg pre { pointer-events:auto; }
+  button { font:inherit; padding:.6em 1.2em; margin:.4em; border-radius:8px; border:0;
+    background:#333; color:var(--fg); }
+  button.primary { background:var(--done); color:#000; }
+  pre { background:#222; padding:.6em; border-radius:6px; font-size:14px; white-space:pre-wrap; text-align:left; }
+  .cross { position:fixed; width:0; height:0; pointer-events:none; }
+  .cross::before, .cross::after { content:""; position:absolute; background:var(--target); }
+  .cross::before { left:-30px; top:-1px; width:60px; height:2px; }
+  .cross::after  { top:-30px; left:-1px; height:60px; width:2px; }
+  .cross .ring { position:absolute; left:-12px; top:-12px; width:20px; height:20px;
+    border:2px solid var(--target); border-radius:50%; }
+  .cross.active .ring { animation:pulse 1s infinite; }
+  .cross.done::before, .cross.done::after { background:var(--done); }
+  .cross.done .ring { border-color:var(--done); }
+  .cross.idle::before, .cross.idle::after { background:#444; }
+  .cross.idle .ring { border-color:#444; }
+  .dot { position:fixed; width:10px; height:10px; margin:-5px 0 0 -5px; border-radius:50%;
+    background:var(--hit); pointer-events:none; }
+  @keyframes pulse { 50% { transform:scale(1.6); opacity:.5; } }
+</style>
+</head>
+<body>
+<div id="msg"></div>
+<script>
+// Must match the matrix in /etc/udev/rules.d/99-gwtc116-touchscreen.rules (the one shipped in this repo).
+// Touches seen here have already passed through it, so we fit a correction on top.
+const CURRENT = [-2.00410, 0.01628, 0.99674, -0.01084, 3.26856, -0.00605];
+
+const INSET = 0.1;
+const POS = [INSET, 0.5, 1 - INSET];
+const TARGETS = [];
+for (const y of POS) for (const x of POS) TARGETS.push([x, y]);
+const MAX_MISS = 0.15;   // reject taps further than this (fraction of screen) from the target
+
+const msg = document.getElementById('msg');
+let mode = 'start', idx = 0, samples = [], measured = [], els = [];
+
+function show(html, top) { msg.innerHTML = html; msg.className = top ? 'top' : ''; }
+function W() { return window.innerWidth; }
+function H() { return window.innerHeight; }
+
+function drawTargets() {
+  els.forEach(e => e.remove());
+  els = TARGETS.map(([x, y]) => {
+    const d = document.createElement('div');
+    d.className = 'cross idle';
+    d.innerHTML = '<div class="ring"></div>';
+    d.style.left = (x * W()) + 'px'; d.style.top = (y * H()) + 'px';
+    document.body.appendChild(d);
+    return d;
+  });
+}
+function clearDots() { document.querySelectorAll('.dot').forEach(d => d.remove()); }
+function dot(px, py, color) {
+  const d = document.createElement('div'); d.className = 'dot';
+  d.style.left = px + 'px'; d.style.top = py + 'px';
+  if (color) d.style.background = color;
+  document.body.appendChild(d);
+}
+
+function startScreen() {
+  mode = 'start';
+  els.forEach(e => e.remove()); els = []; clearDots();
+  show(`<h1>9-point touch calibration</h1>
+    <p>Tap anywhere with your finger to go fullscreen and begin.</p>
+    <p class="dim">Tap the centre of each red crosshair with your fingertip, the way you normally touch the screen.<br>
+    The highlighted target is the one to tap. Lift your finger between taps.</p>`);
+}
+
+async function begin() {
+  try { await document.documentElement.requestFullscreen(); } catch (e) {}
+  await new Promise(r => setTimeout(r, 600));   // let the fullscreen resize settle
+  if (Math.abs(W() - screen.width) > 2 || Math.abs(H() - screen.height) > 2) {
+    show(`<h1>Not fullscreen</h1><p>The page is ${W()}×${H()} but the screen is ${screen.width}×${screen.height}.</p>
+      <p>Press <b>F11</b> to make Firefox fullscreen, then tap to retry.</p>`);
+    mode = 'start';
+    return;
+  }
+  mode = 'calib'; idx = 0; measured = [];
+  drawTargets(); highlight();
+}
+
+function highlight() {
+  els.forEach((e, i) => e.className = 'cross ' + (i < idx ? 'done' : i === idx ? 'active' : 'idle'));
+  show(`<p class="dim">Target ${idx + 1} of 9</p>`, idx === 4);
+}
+
+function finishTap() {
+  if (!samples.length) return;
+  // median of the positions recorded while the finger was down
+  const med = a => { const s = [...a].sort((p, q) => p - q); return s[s.length >> 1]; };
+  const px = med(samples.map(s => s[0])), py = med(samples.map(s => s[1]));
+  samples = [];
+  if (mode === 'test') { dot(px, py); return; }
+  if (mode !== 'calib') return;
+  const [tx, ty] = TARGETS[idx];
+  const u = px / W(), v = py / H();
+  if (Math.hypot(u - tx, v - ty) > MAX_MISS) {
+    show(`<p>That tap landed too far from the target. Try target ${idx + 1} again.</p>`, idx === 4);
+    return;
+  }
+  dot(px, py);
+  measured.push([u, v]);
+  idx++;
+  if (idx < TARGETS.length) highlight(); else results();
+}
+
+// Least-squares affine fit: target = a*u + b*v + c
+function fit(pts, tgt) {
+  const A = [[0,0,0],[0,0,0],[0,0,0]], B = [0,0,0];
+  pts.forEach(([u, v], i) => {
+    const row = [u, v, 1];
+    for (let r = 0; r < 3; r++) { B[r] += row[r] * tgt[i]; for (let c = 0; c < 3; c++) A[r][c] += row[r] * row[c]; }
+  });
+  for (let i = 0; i < 3; i++) {
+    let p = i; for (let r = i + 1; r < 3; r++) if (Math.abs(A[r][i]) > Math.abs(A[p][i])) p = r;
+    [A[i], A[p]] = [A[p], A[i]]; [B[i], B[p]] = [B[p], B[i]];
+    for (let r = 0; r < 3; r++) if (r !== i) {
+      const f = A[r][i] / A[i][i];
+      for (let c = 0; c < 3; c++) A[r][c] -= f * A[i][c];
+      B[r] -= f * B[i];
+    }
+  }
+  return B.map((b, i) => b / A[i][i]);
+}
+
+function results() {
+  mode = 'results';
+  const [a, b, c] = fit(measured, TARGETS.map(t => t[0]));
+  const [d, e, f] = fit(measured, TARGETS.map(t => t[1]));
+  // New matrix = correction ∘ current
+  const [m0, m1, m2, m3, m4, m5] = CURRENT;
+  const NEW = [a*m0 + b*m3, a*m1 + b*m4, a*m2 + b*m5 + c,
+               d*m0 + e*m3, d*m1 + e*m4, d*m2 + e*m5 + f];
+  const px = (du, dv) => Math.hypot(du * W(), dv * H());
+  const before = measured.map(([u, v], i) => px(u - TARGETS[i][0], v - TARGETS[i][1]));
+  const after = measured.map(([u, v], i) => px(a*u + b*v + c - TARGETS[i][0], d*u + e*v + f - TARGETS[i][1]));
+  measured.forEach(([u, v]) => dot((a*u + b*v + c) * W(), (d*u + e*v + f) * H(), 'var(--done)'));
+  const avg = x => (x.reduce((s, y) => s + y, 0) / x.length).toFixed(1);
+  const max = x => Math.max(...x).toFixed(1);
+  const matrix = NEW.map(x => x.toFixed(5)).join(' ');
+  const rule = `# Gateway GWTC116-2 Silead touchscreen calibration (9-point, calibrate9.html)
+ACTION=="add|change", KERNEL=="event*", ATTRS{name}=="silead_ts", ENV{LIBINPUT_CALIBRATION_MATRIX}="${matrix}"
+`;
+  window._rule = rule;
+  show(`<h1>Done</h1>
+    <p>Average miss: <b>${avg(before)} px</b> now → <b>${avg(after)} px</b> after the fix
+       (worst ${max(before)} → ${max(after)} px)</p>
+    <p class="dim">Blue dots = where your taps landed. Green = where they will land with the new calibration.<br>
+    Anything still left over after the fix comes from the panel being uneven, which a calibration can't remove.</p>
+    <pre>${matrix}</pre>
+    <button class="primary" id="save">Save calibration</button>
+    <button id="redo">Redo</button>
+    <button id="test">Test mode</button>`, true);
+  document.getElementById('save').onclick = save;
+  document.getElementById('redo').onclick = () => { clearDots(); mode = 'calib'; idx = 0; measured = []; drawTargets(); highlight(); };
+  document.getElementById('test').onclick = testMode;
+}
+
+function save() {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([window._rule], { type: 'text/plain' }));
+  a.download = 'touch-calibration.rules';
+  document.body.appendChild(a); a.click(); a.remove();
+  document.getElementById('save').textContent = 'Saved to Downloads ✓';
+}
+
+function testMode() {
+  mode = 'test'; clearDots();
+  if (!els.length) drawTargets();
+  els.forEach(e => e.className = 'cross');
+  show(`<p class="dim">Test mode: tap the crosshairs, and a blue dot marks where each touch landed.<br>
+    <button id="clear">Clear dots</button><button id="back">Start over</button></p>`, true);
+  document.getElementById('clear').onclick = clearDots;
+  document.getElementById('back').onclick = startScreen;
+}
+
+addEventListener('pointerdown', e => {
+  if (e.target.closest('button')) return;
+  e.preventDefault();
+  if (mode === 'start') { begin(); return; }
+  samples = [[e.clientX, e.clientY]];
+}, { passive: false });
+addEventListener('pointermove', e => { if (samples.length && e.buttons) samples.push([e.clientX, e.clientY]); });
+addEventListener('pointerup', e => { if (!e.target.closest || !e.target.closest('button')) finishTap(); });
+addEventListener('contextmenu', e => e.preventDefault());   // long-press would open a menu
+addEventListener('resize', () => {
+  if (mode === 'calib') { drawTargets(); highlight(); }
+  else if (mode === 'test') { drawTargets(); els.forEach(e => e.className = 'cross'); }
+});
+
+if (location.hash === '#test') { mode = 'test'; drawTargets(); testMode(); } else startScreen();
+</script>
+</body>
+</html>
