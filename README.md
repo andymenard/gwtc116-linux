@@ -14,7 +14,7 @@ GWTC116-2 under Linux. Tested on Kubuntu 26.04 (KDE Plasma 6.6, kernel 7.0).
 ## Install
 
 ```sh
-git clone https://github.com/<you>/gwtc116-linux
+git clone https://github.com/andymenard/gwtc116-linux
 cd gwtc116-linux
 ./install.sh
 ```
